@@ -11,44 +11,26 @@ def compress_string_to_gzip(data_string):
     """
     Comprime un string a formato gzip y retorna BytesIO
     """
-    # Convertir string a bytes
     data_bytes = data_string.encode('utf-8')
-    
-    # Crear buffer de bytes comprimidos
     compressed_buffer = BytesIO()
     
-    # Comprimir datos
     with gzip.GzipFile(fileobj=compressed_buffer, mode='wb') as gz_file:
         gz_file.write(data_bytes)
     
-    # Resetear posición del buffer
     compressed_buffer.seek(0)
     return compressed_buffer
 
 def lambda_handler(event, context):
     """
     Función Lambda para extraer recursos de AWS Config y guardar en S3
-    
-    Variables de entorno requeridas (configuradas por Terraform):
-    - REGION: Región de AWS
-    - AGGREGATOR_NAME: Nombre del Config Aggregator
-    - S3_BUCKET: Bucket de destino
-    - USE_AGGREGATOR: Usar aggregator (true/false)
-    - CSV_FILENAME: Nombre del archivo CSV principal
-    - EXCEL_FILENAME: Nombre del archivo CSV para Excel
-    - SUMMARY_FILENAME: Nombre del archivo de resumen JSON
-    - S3_KEY_PREFIX: Prefijo para las llaves de S3
-    - ACCOUNT_ID: ID de la cuenta AWS
-    - ENVIRONMENT: Entorno (dev/prod/staging)
     """
     
-    # Configuración desde variables de entorno únicamente
+    # Configuración desde variables de entorno
     region = os.environ.get('REGION')
     aggregator_name = os.environ.get('AGGREGATOR_NAME')
     s3_bucket = os.environ.get('S3_BUCKET')
     use_aggregator = os.environ.get('USE_AGGREGATOR', 'true').lower() == 'true'
     
-    # Configuración de archivos de salida
     csv_filename = os.environ.get('CSV_FILENAME')
     excel_filename = os.environ.get('EXCEL_FILENAME')
     summary_filename = os.environ.get('SUMMARY_FILENAME')
@@ -86,9 +68,6 @@ def lambda_handler(event, context):
     
     print(f"Iniciando extracción de recursos...")
     print(f"Event recibido: {json.dumps(event, default=str)}")
-    print(f"Variables de entorno - REGION: {os.environ.get('REGION')}")
-    print(f"Variables de entorno - AGGREGATOR_NAME: {os.environ.get('AGGREGATOR_NAME')}")
-    print(f"Variables de entorno - S3_BUCKET: {os.environ.get('S3_BUCKET')}")
     print(f"Configuración final:")
     print(f"  Región: {region}")
     print(f"  Aggregator: {aggregator_name}")
@@ -148,7 +127,6 @@ def lambda_handler(event, context):
         
         try:
             if use_aggregator:
-                # Usar aggregator para múltiples cuentas
                 paginator = config_client.get_paginator('list_aggregate_discovered_resources')
                 page_iterator = paginator.paginate(
                     ConfigurationAggregatorName=aggregator_name,
@@ -167,7 +145,6 @@ def lambda_handler(event, context):
                         })
                         resource_count[resource_type] += 1
             else:
-                # Usar cuenta y región actual
                 paginator = config_client.get_paginator('list_discovered_resources')
                 page_iterator = paginator.paginate(resourceType=resource_type)
                 
@@ -192,41 +169,52 @@ def lambda_handler(event, context):
     
     print(f"\nTotal de recursos encontrados: {len(all_resources)}")
     
-    # Generar CSV con formato correcto para Excel
+    # Generar CSV con formato para Excel
     if all_resources:
         csv_buffer = StringIO()
         fieldnames = ['ResourceType', 'ResourceId', 'ResourceName', 'SourceAccountId', 'SourceRegion']
         writer = csv.DictWriter(csv_buffer, fieldnames=fieldnames, quoting=csv.QUOTE_ALL)
         writer.writeheader()
         
-        # Formatear datos para evitar notación científica en Excel
-        formatted_resources = []
+        excel_resources = []
         for resource in all_resources:
-            # Asegurar que SourceAccountId sea tratado como texto
-            account_id = str(resource.get('SourceAccountId', ''))
-            
-            formatted_resource = {
+            excel_resource = {
                 'ResourceType': str(resource.get('ResourceType', '')),
                 'ResourceId': str(resource.get('ResourceId', '')),
                 'ResourceName': str(resource.get('ResourceName', '')),
-                'SourceAccountId': f'="{account_id}"',  # Fórmula Excel para forzar texto
+                'SourceAccountId': str(resource.get('SourceAccountId', '')).zfill(12),
                 'SourceRegion': str(resource.get('SourceRegion', ''))
             }
-            formatted_resources.append(formatted_resource)
+            excel_resources.append(excel_resource)
         
-        writer.writerows(formatted_resources)
+        writer.writerows(excel_resources)
         
-        # Subir a S3 con nombres configurables
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        s3_key = f'{s3_key_prefix}/current/{csv_filename}'
-        s3_key_excel = f'{s3_key_prefix}/current/{excel_filename}'
         
-        # También guardar copia con timestamp para histórico (comprimidas)
-        s3_key_historical = f'{s3_key_prefix}/historical/{csv_filename.replace(".csv", f"_{timestamp}.csv.gz")}'
-        excel_s3_key_historical = f'{s3_key_prefix}/historical/{excel_filename.replace(".csv", f"_{timestamp}.csv.gz")}'
+        # Generar resumen JSON
+        summary = {
+            'timestamp': timestamp,
+            'last_updated': datetime.now().isoformat(),
+            'total_resources': len(all_resources),
+            'resources_by_type': dict(resource_count)
+        }
+        
+        # Crear archivo consolidado con CSV y JSON
+        consolidated_content = f"""=== AWS CONFIG INVENTORY ===
+Timestamp: {timestamp}
+Total Resources: {len(all_resources)}
+
+=== SUMMARY (JSON) ===
+{json.dumps(summary, indent=2)}
+
+=== INVENTORY DATA (CSV) ===
+{csv_buffer.getvalue()}
+"""
+        
+        # Subir versión actual sin comprimir
+        s3_key = f'{s3_key_prefix}/current/{csv_filename}'
         
         try:
-            # Subir CSV principal con nombre fijo (datasource)
             s3_client.put_object(
                 Bucket=s3_bucket,
                 Key=s3_key,
@@ -237,118 +225,30 @@ def lambda_handler(event, context):
                     'RecordCount': str(len(all_resources))
                 }
             )
-            print(f"✓ CSV actual subido exitosamente a s3://{s3_bucket}/{s3_key}")
+            print(f"✓ CSV actual subido a s3://{s3_bucket}/{s3_key}")
             
-            # Subir copia histórica comprimida
-            compressed_csv = compress_string_to_gzip(csv_buffer.getvalue())
+            # Subir UNA sola copia histórica comprimida con todo
+            historical_filename = f'inventory-complete_{timestamp}.txt.gz'
+            s3_key_historical = f'{s3_key_prefix}/historical/{historical_filename}'
+            
+            compressed_data = compress_string_to_gzip(consolidated_content)
             s3_client.put_object(
                 Bucket=s3_bucket,
                 Key=s3_key_historical,
-                Body=compressed_csv.getvalue(),
+                Body=compressed_data.getvalue(),
                 ContentType='application/gzip',
                 ContentEncoding='gzip',
                 Metadata={
-                    'original-size': str(len(csv_buffer.getvalue())),
-                    'compression': 'gzip'
+                    'original-size': str(len(consolidated_content)),
+                    'compression': 'gzip',
+                    'contains': 'summary-json-and-csv-data'
                 }
             )
-            print(f"✓ CSV histórico comprimido subido a s3://{s3_bucket}/{s3_key_historical}")
-            
-            # Generar versión para Excel sin fórmulas (usando comillas simples)
-            excel_csv_buffer = StringIO()
-            excel_writer = csv.DictWriter(excel_csv_buffer, fieldnames=fieldnames, quoting=csv.QUOTE_ALL)
-            excel_writer.writeheader()
-            
-            excel_resources = []
-            for resource in all_resources:
-                excel_resource = {
-                    'ResourceType': str(resource.get('ResourceType', '')),
-                    'ResourceId': str(resource.get('ResourceId', '')),
-                    'ResourceName': str(resource.get('ResourceName', '')),
-                    'SourceAccountId': str(resource.get('SourceAccountId', '')).zfill(12),  # Pad con ceros
-                    'SourceRegion': str(resource.get('SourceRegion', ''))
-                }
-                excel_resources.append(excel_resource)
-            
-            excel_writer.writerows(excel_resources)
-            
-            # Subir versión Excel actual
-            s3_client.put_object(
-                Bucket=s3_bucket,
-                Key=s3_key_excel,
-                Body=excel_csv_buffer.getvalue(),
-                ContentType='text/csv',
-                Metadata={
-                    'format': 'excel-friendly',
-                    'LastUpdated': timestamp,
-                    'RecordCount': str(len(all_resources))
-                }
-            )
-            print(f"✓ CSV Excel actual subido a s3://{s3_bucket}/{s3_key_excel}")
-            
-            # Subir versión Excel histórica comprimida
-            compressed_excel = compress_string_to_gzip(excel_csv_buffer.getvalue())
-            s3_client.put_object(
-                Bucket=s3_bucket,
-                Key=excel_s3_key_historical,
-                Body=compressed_excel.getvalue(),
-                ContentType='application/gzip',
-                ContentEncoding='gzip',
-                Metadata={
-                    'format': 'excel-friendly',
-                    'description': 'CSV optimizado para Excel con Account IDs formateados (comprimido)',
-                    'original-size': str(len(excel_csv_buffer.getvalue())),
-                    'compression': 'gzip'
-                }
-            )
-            print(f"✓ CSV Excel histórico comprimido subido a s3://{s3_bucket}/{excel_s3_key_historical}")
+            print(f"✓ Archivo histórico consolidado comprimido subido a s3://{s3_bucket}/{s3_key_historical}")
             
         except Exception as e:
             print(f"✗ Error subiendo a S3: {str(e)}")
             raise
-        
-        # Guardar resumen JSON actual y histórico
-        summary = {
-            'timestamp': timestamp,
-            'last_updated': datetime.now().isoformat(),
-            'total_resources': len(all_resources),
-            'resources_by_type': dict(resource_count),
-            'current_csv': f's3://{s3_bucket}/{s3_key}',
-            'current_excel_csv': f's3://{s3_bucket}/{s3_key_excel}',
-            'historical_csv': f's3://{s3_bucket}/{s3_key_historical}',
-            'historical_excel_csv': f's3://{s3_bucket}/{excel_s3_key_historical}'
-        }
-        
-        summary_key_current = f'{s3_key_prefix}/current/{summary_filename}'
-        summary_key_historical = f'{s3_key_prefix}/historical/{summary_filename.replace(".json", f"_{timestamp}.json.gz")}'
-        
-        try:
-            # Resumen actual
-            s3_client.put_object(
-                Bucket=s3_bucket,
-                Key=summary_key_current,
-                Body=json.dumps(summary, indent=2),
-                ContentType='application/json'
-            )
-            print(f"✓ Resumen actual subido a s3://{s3_bucket}/{summary_key_current}")
-            
-            # Subir resumen histórico comprimido
-            summary_json = json.dumps(summary, indent=2)
-            compressed_summary = compress_string_to_gzip(summary_json)
-            s3_client.put_object(
-                Bucket=s3_bucket,
-                Key=summary_key_historical,
-                Body=compressed_summary.getvalue(),
-                ContentType='application/gzip',
-                ContentEncoding='gzip',
-                Metadata={
-                    'original-size': str(len(summary_json)),
-                    'compression': 'gzip'
-                }
-            )
-            print(f"✓ Resumen histórico comprimido subido a s3://{s3_bucket}/{summary_key_historical}")
-        except Exception as e:
-            print(f"⚠ Error subiendo resumen: {str(e)}")
         
         return {
             'statusCode': 200,
@@ -357,16 +257,7 @@ def lambda_handler(event, context):
                 'timestamp': timestamp,
                 'total_resources': len(all_resources),
                 'current_csv': f's3://{s3_bucket}/{s3_key}',
-                'current_excel_csv': f's3://{s3_bucket}/{s3_key_excel}',
-                'historical_csv_compressed': f's3://{s3_bucket}/{s3_key_historical}',
-                'historical_excel_csv_compressed': f's3://{s3_bucket}/{excel_s3_key_historical}',
-                'current_summary': f's3://{s3_bucket}/{summary_key_current}',
-                'historical_summary_compressed': f's3://{s3_bucket}/{summary_key_historical}',
-                'compression_info': {
-                    'historical_files_compressed': True,
-                    'compression_type': 'gzip',
-                    'estimated_space_savings': '70-90%'
-                },
+                'historical_consolidated': f's3://{s3_bucket}/{s3_key_historical}',
                 'resources_by_type': dict(resource_count)
             })
         }
@@ -380,20 +271,7 @@ def lambda_handler(event, context):
         }
 
 
-# Para pruebas locales (NO USAR - configurar variables de entorno en su lugar)
 if __name__ == "__main__":
-    print("ADVERTENCIA: Para pruebas locales, configure las variables de entorno requeridas:")
-    print("- REGION")
-    print("- AGGREGATOR_NAME") 
-    print("- S3_BUCKET")
-    print("- CSV_FILENAME")
-    print("- EXCEL_FILENAME")
-    print("- SUMMARY_FILENAME")
-    print("- S3_KEY_PREFIX")
-    print("- ACCOUNT_ID")
-    print("- ENVIRONMENT")
-    print("- USE_AGGREGATOR")
-    
-    # La función ahora requiere variables de entorno, no event parameters
+    print("ADVERTENCIA: Configure las variables de entorno requeridas")
     result = lambda_handler({}, None)
     print(json.dumps(result, indent=2))
