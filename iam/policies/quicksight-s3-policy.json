@@ -1,0 +1,49 @@
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "QuickSightListBucket",
+            "Effect": "Allow",
+            "Principal": {
+                "Service": "quicksight.amazonaws.com"
+            },
+            "Action": [
+                "s3:ListBucket",
+                "s3:GetBucketLocation"
+            ],
+            "Resource": "arn:aws:s3:::${bucket_name}"
+        },
+        {
+            "Sid": "QuickSightReadObjects",
+            "Effect": "Allow",
+            "Principal": {
+                "Service": "quicksight.amazonaws.com"
+            },
+            "Action": [
+                "s3:GetObject",
+                "s3:GetObjectVersion"
+            ],
+            "Resource": "arn:aws:s3:::${bucket_name}/*"
+        },
+        {
+            "Sid": "QuickSightUserAccess",
+            "Effect": "Allow",
+            "Principal": {
+                "AWS": "arn:aws:iam::${account_id}:root"
+            },
+            "Action": [
+                "s3:GetObject",
+                "s3:ListBucket"
+            ],
+            "Resource": [
+                "arn:aws:s3:::${bucket_name}",
+                "arn:aws:s3:::${bucket_name}/aws-config-inventory/*"
+            ],
+            "Condition": {
+                "StringEquals": {
+                    "aws:RequestedService": "quicksight.amazonaws.com"
+                }
+            }
+        }
+    ]
+}

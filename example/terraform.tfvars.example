@@ -1,0 +1,31 @@
+# Archivo de configuración para despliegue de ejemplo
+# Copia este archivo como terraform.tfvars y ajusta los valores según tu entorno
+
+# Configuración básica
+aws_region      = "us-east-1"
+function_name   = "config-inventory-prod"
+s3_bucket_name  = "aws-inventory-organization-028139915738"
+
+# Configuración de AWS Config
+aggregator_name = "aws-controltower-ConfigAggregatorForOrganizations"
+
+# Programación automática
+enable_schedule     = true
+schedule_expression = "cron(0 8 * * ? *)"  # Diario a las 8 AM UTC
+
+# Configuración de la Lambda
+lambda_timeout     = 600  # 10 minutos
+lambda_memory_size = 512  # MB
+lambda_runtime     = "python3.9"
+
+# Retención de logs
+log_retention_days = 30
+
+# Tags
+common_tags = {
+  Project     = "AWSInventory"
+  Environment = "production"
+  ManagedBy   = "Terraform"
+  Team        = "Platform"
+  CostCenter  = "IT-Operations"
+}

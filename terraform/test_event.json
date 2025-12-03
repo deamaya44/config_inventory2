@@ -1,0 +1,6 @@
+{
+  "region": "us-east-1",
+  "aggregator_name": "aws-controltower-ConfigAggregatorForOrganizations",
+  "s3_bucket": "aws-inventory-organization-028139915738",
+  "use_aggregator": true
+}

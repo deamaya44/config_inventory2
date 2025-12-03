@@ -1,0 +1,15 @@
+{
+  "fileLocations": [
+    {
+      "URIPrefixes": [
+        "s3://aws-config-inventory-028139915738/aws-config-inventory/"
+      ]
+    }
+  ],
+  "globalUploadSettings": {
+    "format": "CSV",
+    "delimiter": ",",
+    "textqualifier": "\"",
+    "containsHeader": "true"
+  }
+}

@@ -1,0 +1,56 @@
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "AWSConfigBucketPermissionsCheck",
+            "Effect": "Allow",
+            "Principal": {
+                "Service": "config.amazonaws.com"
+            },
+            "Action": "s3:GetBucketAcl",
+            "Resource": "arn:aws:s3:::${bucket_name}"
+        },
+        {
+            "Sid": "AWSConfigBucketDelivery",
+            "Effect": "Allow",
+            "Principal": {
+                "Service": "config.amazonaws.com"
+            },
+            "Action": "s3:PutObject",
+            "Resource": "arn:aws:s3:::${bucket_name}/config/*",
+            "Condition": {
+                "StringEquals": {
+                    "s3:x-amz-acl": "bucket-owner-full-control"
+                }
+            }
+        },
+        {
+            "Sid": "LambdaInventoryAccess",
+            "Effect": "Allow",
+            "Principal": {
+                "AWS": "${lambda_role_arn}"
+            },
+            "Action": [
+                "s3:PutObject",
+                "s3:PutObjectAcl"
+            ],
+            "Resource": "arn:aws:s3:::${bucket_name}/aws-config-inventory/*"
+        },
+        {
+            "Sid": "QuickSightAccess",
+            "Effect": "Allow",
+            "Principal": {
+                "Service": "quicksight.amazonaws.com"
+            },
+            "Action": [
+                "s3:GetObject",
+                "s3:GetObjectVersion",
+                "s3:ListBucket"
+            ],
+            "Resource": [
+                "arn:aws:s3:::${bucket_name}",
+                "arn:aws:s3:::${bucket_name}/*"
+            ]
+        }
+    ]
+}
