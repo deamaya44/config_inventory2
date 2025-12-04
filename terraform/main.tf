@@ -1,18 +1,9 @@
-# Data sources
-data "aws_caller_identity" "current" {}
-data "aws_region" "current" {}
 
-# Crear el archivo ZIP de la función Lambda
-data "archive_file" "lambda_zip" {
-  type        = "zip"
-  source_file = "${path.module}/../main.py"
-  output_path = "${path.module}/config_inventory_lambda.zip"
-}
 
 # S3 Bucket para almacenar inventarios de Config
 resource "aws_s3_bucket" "config_inventory" {
   bucket        = local.s3_config.bucket_name
-  force_destroy = var.s3_force_destroy
+  force_destroy = local.s3_config.force_destroy
   
   tags = merge(local.common_tags, {
     Purpose = "AWS Config Inventory Storage"
@@ -49,7 +40,7 @@ resource "aws_s3_bucket_public_access_block" "config_inventory" {
   restrict_public_buckets = true
 }
 
-# Política del bucket para Config y QuickSight
+# Política del bucket para Config
 resource "aws_s3_bucket_policy" "config_inventory" {
   bucket = aws_s3_bucket.config_inventory.id
   
@@ -180,19 +171,3 @@ resource "aws_lambda_permission" "allow_eventbridge" {
   source_arn    = aws_cloudwatch_event_rule.lambda_schedule[0].arn
 }
 
-# QuickSight Manifest generado usando templatefile
-resource "aws_s3_object" "quicksight_manifest" {
-  bucket = aws_s3_bucket.config_inventory.bucket
-  key    = "quicksight/manifest.json"
-  
-  content = templatefile("${path.module}/../quicksight/manifest-simple.json", {
-    bucket_name   = aws_s3_bucket.config_inventory.bucket
-    s3_key_prefix = local.s3_config.prefix
-  })
-  
-  content_type = "application/json"
-  
-  tags = merge(local.common_tags, {
-    Purpose = "QuickSight Dataset Manifest"
-  })
-}
